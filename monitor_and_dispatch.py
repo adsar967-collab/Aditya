@@ -77,20 +77,31 @@ def analyze_outliers_and_dispatch():
         model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
 
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": f"🔥 **Viral Outlier Trend Analysis Report** 🔥\n\n{response.text}",
-            "parse_mode": "Markdown"
-        }
-        tg_response = requests.post(url, payload)
+        # Telegram rejects any single message over 4096 characters, so long
+        # reports get split into safe-sized chunks and sent one after another.
+        full_text = f"🔥 Viral Outlier Trend Analysis Report 🔥\n\n{response.text}"
 
-        if tg_response.status_code != 200:
-            print(f"Telegram send FAILED. Status: {tg_response.status_code}")
-            print(f"Telegram response: {tg_response.text}")
-            raise Exception(f"Telegram API rejected the message: {tg_response.text}")
-        else:
-            print("Telegram message sent successfully.")
+        MAX_CHUNK_SIZE = 3800  # kept comfortably under 4096 for safety margin
+        chunks = [full_text[i:i + MAX_CHUNK_SIZE] for i in range(0, len(full_text), MAX_CHUNK_SIZE)]
+
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+        for idx, chunk in enumerate(chunks, start=1):
+            part_label = f"[Part {idx}/{len(chunks)}]\n\n" if len(chunks) > 1 else ""
+            payload = {
+                "chat_id": chat_id,
+                "text": part_label + chunk
+                # Note: no Markdown parse_mode. Splitting text can cut formatting
+                # in half (e.g. an unclosed **), which Telegram would also reject.
+            }
+            tg_response = requests.post(url, payload)
+
+            if tg_response.status_code != 200:
+                print(f"Telegram send FAILED on part {idx}. Status: {tg_response.status_code}")
+                print(f"Telegram response: {tg_response.text}")
+                raise Exception(f"Telegram API rejected part {idx}: {tg_response.text}")
+            else:
+                print(f"Telegram message part {idx}/{len(chunks)} sent successfully.")
 
     except Exception as e:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
